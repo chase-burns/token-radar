@@ -350,6 +350,14 @@ function chainOf(p: SnapshotProtocol): string {
   return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
 }
 
+/** The chains a plan can spread across, in the protocol's own words: one, two, or several. */
+function chainsOf(p: SnapshotProtocol): string {
+  if (p.chains.length === 0) return 'its main chain';
+  if (p.chains.length === 1) return p.chains[0]!;
+  if (p.chains.length === 2) return `${p.chains[0]} and ${p.chains[1]}`;
+  return `${p.chains[0]} and ${p.chains[1]} (it runs on ${p.chains.length} chains in all)`;
+}
+
 /** How much capital one farm position needs, from the protocol's own TVL. */
 function capitalFor(p: SnapshotProtocol): number {
   if (p.tvl_usd >= 5_000_000_000) return 250;
@@ -383,28 +391,57 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
 }
 
+/** The category's weekly qualifying action: the small repeat move that keeps a farm alive. */
+function weeklyFor(p: SnapshotProtocol, chain: string): string {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Top up the supply or adjust the borrow on ${name} once a week so the position keeps moving.`;
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Swap a small amount through ${name} and rebalance the liquidity position once a week.`;
+  if (c.includes('bridge')) return `Bridge a small amount through ${name} once a week, alternating direction between ${chain} and the other side.`;
+  if (c.includes('staking') || c.includes('restak')) return `Claim any staking rewards on ${name} once a week and restake them into the same position.`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `Open and close one small hedged trade on ${name} each week to keep the account active.`;
+  if (c.includes('curator') || c.includes('allocator')) return `Check the ${name} vault's allocation once a week and move a small amount between its vaults if it rebalances.`;
+  if (c.includes('rwa')) return `Check the yield accrual on ${name} once a week and mint a small top-up if the window is open.`;
+  return `Make one qualifying action each week on ${name}, such as a deposit, a withdrawal and redeposit, or a vote.`;
+}
+
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived from
- * the protocol's own record (category, chains, TVL, age), never from a hand-written list of names.
+ * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is derived
+ * from the protocol's own record (category, chains, TVL, age), never from a hand-written list of
+ * names: the category picks the actions, the chains pick where they happen, the TVL picks the
+ * capital, and the age picks the holding window.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
-  const action = actionFor(p, capital, chain);
-  return [
+  const steps: FarmStep[] = [
     {
       text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
       cost: 'under $3 of gas for the first transaction',
       time: '5 minutes',
     },
     {
-      text: action,
+      text: `Before depositing anything, verify ${p.name}'s app address from its official documentation or social profile and bookmark it; never follow a link from a reply or a direct message.`,
+      cost: 'nothing to check',
+      time: '5 minutes',
+    },
+    {
+      text: actionFor(p, capital, chain),
       cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
       time: '15 minutes to set up',
     },
+  ];
+  if (p.chains.length > 1) {
+    steps.push({
+      text: `Spread the activity across ${chainsOf(p)}: a position on more than one of the chains it runs on is harder to mistake for a one-off.`,
+      cost: 'about $2 of gas a week',
+      time: '10 minutes a week',
+    });
+  }
+  steps.push(
     {
-      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.`,
+      text: weeklyFor(p, chain),
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
     },
@@ -423,7 +460,8 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       cost: 'nothing but the log',
       time: '5 minutes',
     },
-  ];
+  );
+  return steps;
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
