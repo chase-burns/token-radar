@@ -368,7 +368,7 @@
       ),
       h('p', { class: 'sub', text: 'The category multiple is the market pricing its own TVL: for each category, the median market-cap / TVL of the snapshot\'s tokenised protocols in that category, shrunk toward the global peer median of ' + DATA.multiples.global + ' by the peer count (weight ' + m.peer_shrinkage + ') and clamped to [' + m.multiple_floor + ', ' + m.multiple_cap + ']. A category with no tokenised peers takes the global median. Each row records the exact multiple it was scored with; open a row to see it.' }),
       multiplesTable(),
-      h('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' })
+      h('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar takes the pre-token protocols below the watchlist floor by TVL, under the watchlist\'s own exclusion: bridges, wrapped and staked products and exchange products are left out, because each is a claim on a token that already trades, not a launch still to come. The live-token protocols are set aside with their market caps shown.' })
     );
   }
 

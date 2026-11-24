@@ -2,9 +2,12 @@
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and may add
 // pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol is
-// pre-token when its index entry records no token (no market cap, no CoinGecko id, no symbol); the
-// snapshot's live-token protocols are kept apart and shown as the market's own values, never mixed into
-// the ranked board.
+// pre-token when its index entry records no token (no market cap, no CoinGecko id, no symbol); an early
+// row must also pass the watchlist's own exclusion — no bridge, canonical bridge, liquid staking or
+// restaking category, no wrapped/staked/staking whole word in its name, no version marker, no exchange's
+// name at its head — so the early radar never ranks a wrapped, staked or bridged product of a token that
+// already trades as if it were a launch still to come. The snapshot's live-token protocols are kept apart
+// and shown as the market's own values, never mixed into the ranked board.
 //
 // Implied value follows only from the snapshot's own figures:
 //
@@ -75,7 +78,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -259,14 +262,44 @@ export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: Mo
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
+/**
+ * The categories that make a protocol a product of a token that already trades, never a launch
+ * of its own: the same set the snapshot's watchlist rule sets aside. A bridge's or a liquid
+ * staking product's "token to come" is the wrapped or staked asset itself, priced already.
+ */
+const PRODUCT_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+
+/** A whole word in a name that marks a wrapped or staked product of an asset that already trades. */
+const PRODUCT_WORD = /\b(wrapped|staked|staking)\b/i;
+
+/** The exchanges whose own products the watchlist rule sets aside: a name beginning with one is theirs. */
+const EXCHANGE_NAMES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
+/** Whether a name begins with an exchange's name, as the watchlist rule reads it. */
+function exchangeNamed(name: string): boolean {
+  return EXCHANGE_NAMES.some((e) => name === e || name.startsWith(`${e} `));
+}
+
 /** Whether a protocol records no token at all. */
 export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
-/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
+/**
+ * Whether a protocol is one the board may rank: pre-token, and not a wrapped, staked or bridged
+ * product of a token that already trades — the watchlist's own exclusion, applied to the early
+ * radar too, so an early row is a launch still to come and never a product of one that trades.
+ * (The watchlist itself is added to the board unconditionally: coverage is the gate's row, and
+ * every watchlist slug already passes this rule by the snapshot's construction.)
+ */
 export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+  return (
+    isPreToken(p) &&
+    !PRODUCT_CATEGORIES.has(p.category ?? '') &&
+    !VERSIONED.test(p.name) &&
+    !PRODUCT_WORD.test(p.name) &&
+    !exchangeNamed(p.name)
+  );
 }
 
 /** The snapshot's protocol by slug. */
@@ -292,8 +325,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: pre-token protocols below the watchlist floor, by TVL, capped. Never a replacement
-  // for a watchlist row: a chosen protocol stays chosen.
+  // The early radar: pre-token protocols below the watchlist floor that pass the watchlist's own
+  // exclusion (isRankable), by TVL, capped. Never a replacement for a watchlist row: a chosen
+  // protocol stays chosen.
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
