@@ -6,16 +6,23 @@
 // row must also pass the watchlist's own exclusion — no bridge, canonical bridge, liquid staking or
 // restaking category, no wrapped/staked/staking whole word in its name, no version marker, no exchange's
 // name at its head — so the early radar never ranks a wrapped, staked or bridged product of a token that
-// already trades as if it were a launch still to come. The snapshot's live-token protocols are kept apart
-// and shown as the market's own values, never mixed into the ranked board.
+// already trades as if it were a launch still to come. Two further rules keep an early row a launch of
+// its own: a candidate whose name's head is the brand of a protocol the snapshot itself records with a
+// token is that family's further product (a new chain deployment, a sibling vault), not a new launch;
+// and a family gets one early row, not one per product — candidates that share a name's head, a chain
+// and a listing era are one family's products, and the largest by TVL speaks for the family under its
+// own figures, never a summed record the snapshot does not carry. The snapshot's live-token protocols
+// are kept apart and shown as the market's own values, never mixed into the ranked board.
 //
 // Implied value follows only from the snapshot's own figures:
 //
 //   peers      = the snapshot's tokenised protocols (a market cap and a TVL both recorded)
 //   multiple   = for the protocol's category, the median of peers' mcap / TVL in that category,
-//                shrunk toward the global peer median by the category's peer count:
-//                (n x category median + K x global median) / (n + K), clamped to
-//                [MULTIPLE_FLOOR, MULTIPLE_CAP]; a category with no peers takes the global median
+//                first read within the model's own band [MULTIPLE_FLOOR, MULTIPLE_CAP] — a category
+//                priced by a single runaway peer must not price every protocol in it at the cap —
+//                then shrunk toward the global peer median by the category's peer count:
+//                (n x category median + K x global median) / (n + K), clamped to the same band;
+//                a category with no peers takes the global median
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
@@ -78,7 +85,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -234,7 +241,11 @@ export function peerMultiples(snapshot: Snapshot, model: ModelConstants): PeerMu
   for (const [category, ratios] of ratiosByCategory) {
     const categoryMedian = median(ratios);
     const n = ratios.length;
-    const shrunk = (n * categoryMedian + model.peer_shrinkage * global) / (n + model.peer_shrinkage);
+    // The median enters the shrinkage read within the model's own band: with one peer, the median is
+    // that peer, and a runaway ratio (a market cap hundreds of times a small TVL) would otherwise
+    // price the whole category at the cap. The recorded category_median stays the raw figure.
+    const bandedMedian = Math.min(model.multiple_cap, Math.max(model.multiple_floor, categoryMedian));
+    const shrunk = (n * bandedMedian + model.peer_shrinkage * global) / (n + model.peer_shrinkage);
     byCategory.set(category, { category, peers: n, category_median: categoryMedian, multiple: clampMultiple(shrunk) });
   }
   return { global: clampMultiple(global), byCategory };
@@ -278,6 +289,56 @@ const EXCHANGE_NAMES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX
 /** Whether a name begins with an exchange's name, as the watchlist rule reads it. */
 function exchangeNamed(name: string): boolean {
   return EXCHANGE_NAMES.some((e) => name === e || name.startsWith(`${e} `));
+}
+
+/** A name's head: its first word, lowercased, punctuation stripped; '' when the name has no word. */
+export function brandHead(name: string): string {
+  const first = name
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .find((w) => w.length > 0);
+  return first ?? '';
+}
+
+/** The brands the snapshot itself records with a token: the name heads of its live-token protocols. */
+export function liveBrands(snapshot: Snapshot): Set<string> {
+  const heads = new Set<string>();
+  for (const p of snapshot.protocols) {
+    if (isPreToken(p)) continue;
+    const h = brandHead(p.name);
+    if (h.length >= 3) heads.add(h);
+  }
+  return heads;
+}
+
+/**
+ * Whether a protocol is a further product of a family the snapshot records with a token: its name's
+ * head is that family's brand. A new-chain deployment or a sibling product of a token that already
+ * trades is the family's own token story, never a launch still to come.
+ */
+export function isFamilyProduct(p: SnapshotProtocol, brands: Set<string>): boolean {
+  const h = brandHead(p.name);
+  return h.length >= 3 && brands.has(h);
+}
+
+/** How far apart two listing dates may fall, in days, and still read as one family's launch era. */
+const FAMILY_ERA_DAYS = 1095;
+
+/**
+ * Whether two candidates read as one family's products: the same name head, a chain in common, and —
+ * when both listing dates are recorded — listings within one era. Namesakes from different chains or
+ * different eras keep their own rows: a shared word is not a shared family.
+ */
+function sameFamily(a: SnapshotProtocol, b: SnapshotProtocol): boolean {
+  const h = brandHead(a.name);
+  if (h.length < 3 || h !== brandHead(b.name)) return false;
+  if (!a.chains.some((c) => b.chains.includes(c))) return false;
+  if (a.listed_at !== null && b.listed_at !== null) {
+    const gap = Math.abs(Date.parse(`${a.listed_at}T00:00:00Z`) - Date.parse(`${b.listed_at}T00:00:00Z`)) / DAY_MS;
+    if (Number.isFinite(gap) && gap > FAMILY_ERA_DAYS) return false;
+  }
+  return true;
 }
 
 /** Whether a protocol records no token at all. */
@@ -326,12 +387,19 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     if (p !== undefined) chosen.set(slug, p);
   }
   // The early radar: pre-token protocols below the watchlist floor that pass the watchlist's own
-  // exclusion (isRankable), by TVL, capped. Never a replacement for a watchlist row: a chosen
-  // protocol stays chosen.
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
-    .slice(0, EARLY_ROWS);
+  // exclusion (isRankable) and are no family's further product (isFamilyProduct), by TVL, capped.
+  // One row per family: of the candidates that read as one family's products (sameFamily), only the
+  // largest by TVL is carried, under its own figures. Never a replacement for a watchlist row: a
+  // chosen protocol stays chosen.
+  const brands = liveBrands(snapshot);
+  const candidates = snapshot.protocols
+    .filter((p) => !chosen.has(p.slug) && isRankable(p) && !isFamilyProduct(p, brands) && p.tvl_usd < snapshot.floor_usd)
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const familyKept: SnapshotProtocol[] = [];
+  for (const p of candidates) {
+    if (!familyKept.some((k) => sameFamily(k, p))) familyKept.push(p);
+  }
+  const early = familyKept.slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
 
   const peers = peerMultiples(snapshot, model);
